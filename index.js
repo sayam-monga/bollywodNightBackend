@@ -230,7 +230,7 @@ app.get("/api/bookings", async (req, res) => {
 // Get passes for the authenticated user
 app.get("/api/bookings/my-passes", auth, async (req, res) => {
   try {
-    const userId = req.user.id;
+    req.user = { id: decoded.id };
     const bookings = await Booking.find({ userId });
 
     const passes = bookings.flatMap((booking) =>
