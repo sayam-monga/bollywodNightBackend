@@ -118,7 +118,7 @@ app.post("/api/create-order", async (req, res) => {
     res.status(500).json({ message: "Error creating order" });
   }
 });
-router.post("/register", async (req, res) => {
+app.post("/register", async (req, res) => {
   const { name, email, phone, password } = req.body;
 
   try {
@@ -146,7 +146,7 @@ router.post("/register", async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
-router.post("/login", async (req, res) => {
+app.post("/login", async (req, res) => {
   const { email, password } = req.body;
 
   try {
