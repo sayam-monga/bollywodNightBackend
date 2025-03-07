@@ -99,7 +99,7 @@ app.post("/api/create-order", async (req, res) => {
 });
 
 // Register user
-app.post("/register", async (req, res) => {
+app.post("/api/register", async (req, res) => {
   const { name, email, phone, password } = req.body;
 
   try {
@@ -121,7 +121,7 @@ app.post("/register", async (req, res) => {
 });
 
 // Login user
-app.post("/login", async (req, res) => {
+app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
 
   try {
