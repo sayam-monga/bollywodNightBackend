@@ -5,60 +5,49 @@ const Razorpay = require("razorpay");
 const dotenv = require("dotenv");
 const bodyParser = require("body-parser");
 const crypto = require("crypto");
+const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const bcrypt = require("bcryptjs"); // Added missing bcrypt import
 
-// Load environment variables
 dotenv.config();
 
-// Initialize Express
 const app = express();
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET || "your_jwt_secret";
 
-// Middleware
 app.use(cors());
 app.use(bodyParser.json());
 
-// Initialize Razorpay
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// Connect to MongoDB
 mongoose
-  .connect(process.env.MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
+  .connect(process.env.MONGODB_URI)
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.error("MongoDB connection error:", err));
 
-// Define User Schema & Model (Fixed missing User model)
 const userSchema = new mongoose.Schema({
-  name: String,
-  email: { type: String, unique: true },
-  phone: String,
-  password: String,
+  name: { type: String, required: true },
+  email: { type: String, required: true, unique: true },
+  phone: { type: String, required: true },
+  password: { type: String, required: true },
 });
 const User = mongoose.model("User", userSchema);
 
-// Define Ticket Schema
 const ticketSchema = new mongoose.Schema({
   type: { type: String, required: true, enum: ["STAG", "COUPLE"] },
   quantity: { type: Number, required: true },
   price: { type: Number, required: true },
 });
 
-// Define Booking Schema
 const bookingSchema = new mongoose.Schema({
   tickets: [ticketSchema],
   totalAmount: { type: Number, required: true },
   name: { type: String, required: true },
   email: { type: String, required: true },
   phone: { type: String, required: true },
-  userId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: "User" },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   paymentId: { type: String, required: true },
   bookingId: { type: String, required: true },
   status: {
@@ -69,28 +58,18 @@ const bookingSchema = new mongoose.Schema({
   },
   createdAt: { type: Date, default: Date.now },
 });
-
 const Booking = mongoose.model("Booking", bookingSchema);
 
-// Test Route
-app.get("/test", (req, res) => {
-  res.send("Hello World!");
-});
-
-// Create order endpoint
 app.post("/api/create-order", async (req, res) => {
   try {
     const { amount } = req.body;
-
     const options = {
-      amount: amount * 100, // Convert to paise
+      amount: amount * 100,
       currency: "INR",
       receipt: "receipt_" + Date.now(),
       payment_capture: 1,
     };
-
     const order = await razorpay.orders.create(options);
-
     res.json({ id: order.id, amount: order.amount, currency: order.currency });
   } catch (error) {
     console.error("Error creating order:", error);
@@ -98,70 +77,6 @@ app.post("/api/create-order", async (req, res) => {
   }
 });
 
-// Register user
-app.post("/api/register", async (req, res) => {
-  const { name, email, phone, password } = req.body;
-
-  try {
-    let user = await User.findOne({ email });
-    if (user) return res.status(400).json({ message: "User already exists" });
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    user = new User({ name, email, phone, password: hashedPassword });
-
-    await user.save();
-
-    const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: "1h" });
-
-    res.status(201).json({ token, user });
-  } catch (error) {
-    console.error("Error in registration:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// Login user
-app.post("/api/login", async (req, res) => {
-  const { email, password } = req.body;
-
-  try {
-    const user = await User.findOne({ email });
-    if (!user) return res.status(400).json({ message: "Invalid credentials" });
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch)
-      return res.status(400).json({ message: "Invalid credentials" });
-
-    const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: "1h" });
-
-    res.json({ token, user });
-  } catch (error) {
-    console.error("Login error:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// Authentication Middleware
-const auth = (req, res, next) => {
-  try {
-    const authHeader = req.header("Authorization");
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res
-        .status(401)
-        .json({ message: "No token, authorization denied" });
-    }
-
-    const token = authHeader.split(" ")[1];
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = { id: decoded.id }; // Fix: Use `decoded.id` instead of `decoded.userId`
-    next();
-  } catch (error) {
-    console.error("Auth middleware error:", error);
-    res.status(401).json({ message: "Invalid token" });
-  }
-};
-
-// Verify payment and save booking
 app.post("/api/verify-payment", async (req, res) => {
   try {
     const {
@@ -171,7 +86,12 @@ app.post("/api/verify-payment", async (req, res) => {
       formData,
     } = req.body;
 
-    // Verify signature
+    console.log("Received formData:", formData);
+
+    if (!formData || !formData.userId) {
+      return res.status(400).json({ message: "User ID is required" });
+    }
+
     const generated_signature = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
       .update(razorpay_order_id + "|" + razorpay_payment_id)
@@ -181,17 +101,10 @@ app.post("/api/verify-payment", async (req, res) => {
       return res.status(400).json({ message: "Invalid payment signature" });
     }
 
-    // Generate a unique booking ID
     const bookingId = "BN" + Math.floor(Math.random() * 10000);
 
-    // Save booking
     const newBooking = new Booking({
-      tickets: formData.tickets,
-      totalAmount: formData.totalAmount,
-      name: formData.name,
-      email: formData.email,
-      phone: formData.phone,
-      userId: formData.userId,
+      ...formData,
       paymentId: razorpay_payment_id,
       bookingId,
     });
@@ -204,7 +117,6 @@ app.post("/api/verify-payment", async (req, res) => {
   }
 });
 
-// Get all bookings for a user
 app.get("/api/bookings/user/:email", async (req, res) => {
   try {
     const { email } = req.params;
@@ -216,7 +128,6 @@ app.get("/api/bookings/user/:email", async (req, res) => {
   }
 });
 
-// Get all bookings (for testing)
 app.get("/api/bookings", async (req, res) => {
   try {
     const bookings = await Booking.find();
@@ -227,26 +138,77 @@ app.get("/api/bookings", async (req, res) => {
   }
 });
 
-// Get passes for the authenticated user
-app.get("/api/bookings/my-passes", auth, async (req, res) => {
+app.post("/api/register", async (req, res) => {
   try {
-    req.user = { id: decoded.id };
+    const { name, email, phone, password } = req.body;
+    let user = await User.findOne({ email });
+    if (user) return res.status(400).json({ message: "Email already in use" });
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    user = new User({ name, email, phone, password: hashedPassword });
+    await user.save();
+
+    const token = jwt.sign({ userId: user._id }, JWT_SECRET, {
+      expiresIn: "7d",
+    });
+
+    res.json({ token, user: { userId: user._id, name, email, phone } });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+app.get("/api/bookings/my-passes", async (req, res) => {
+  try {
+    // Handle authentication directly in the route
+    const authHeader = req.header("Authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res
+        .status(401)
+        .json({ message: "No token, authorization denied" });
+    }
+
+    // Extract token from header
+    const token = authHeader.split(" ")[1];
+
+    // Verify token
+    let decoded;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch (err) {
+      return res.status(401).json({ message: "Token is not valid" });
+    }
+
+    // Get userId from decoded token
+    const userId = decoded.userId;
+
+    console.log("Fetching passes for user:", userId);
+
+    // Find all bookings for this user
     const bookings = await Booking.find({ userId });
 
-    const passes = bookings.flatMap((booking) =>
-      booking.tickets.map((ticket) => ({
-        _id: booking._id.toString(),
-        bookingId: booking.bookingId,
-        ticketType: ticket.type,
-        quantity: ticket.quantity,
-        totalAmount: ticket.price * ticket.quantity,
-        name: booking.name,
-        email: booking.email,
-        phone: booking.phone,
-        status: booking.status,
-        createdAt: booking.createdAt,
-      }))
-    );
+    console.log(`Found ${bookings.length} bookings for user ${userId}`);
+
+    // Transform bookings into passes format expected by the frontend
+    const passes = bookings
+      .map((booking) => {
+        // For each ticket type in the booking, create a pass
+        return booking.tickets.map((ticket) => ({
+          _id: booking._id.toString(),
+          bookingId: booking.bookingId,
+          ticketType: ticket.type,
+          quantity: ticket.quantity,
+          totalAmount: ticket.price * ticket.quantity,
+          name: booking.name,
+          email: booking.email,
+          phone: booking.phone,
+          status: booking.status,
+          createdAt: booking.createdAt,
+        }));
+      })
+      .flat(); // Flatten the array of arrays
+
+    console.log(`Transformed into ${passes.length} passes`);
 
     res.json(passes);
   } catch (error) {
@@ -254,6 +216,29 @@ app.get("/api/bookings/my-passes", auth, async (req, res) => {
     res.status(500).json({ message: "Error fetching passes" });
   }
 });
+app.post("/api/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
+    if (!user)
+      return res.status(400).json({ message: "Invalid email or password" });
 
-// Start server
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch)
+      return res.status(400).json({ message: "Invalid email or password" });
+
+    const token = jwt.sign({ userId: user._id }, JWT_SECRET, {
+      expiresIn: "7d",
+    });
+
+    res.json({
+      token,
+      user: { id: user._id, name: user.name, email, phone: user.phone },
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
