@@ -92,6 +92,9 @@ const bookingSchema = new mongoose.Schema({
 const Booking = mongoose.model("Booking", bookingSchema);
 
 // Create order endpoint
+app.get("/test", (req, res) => {
+  res.send("Hello World!");
+});
 app.post("/api/create-order", async (req, res) => {
   try {
     const { amount } = req.body;
