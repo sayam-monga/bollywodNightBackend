@@ -6,6 +6,8 @@ const dotenv = require("dotenv");
 const bodyParser = require("body-parser");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs"); // Added missing bcrypt import
+
 // Load environment variables
 dotenv.config();
 
@@ -13,6 +15,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET;
+
 // Middleware
 app.use(cors());
 app.use(bodyParser.json());
@@ -25,82 +28,62 @@ const razorpay = new Razorpay({
 
 // Connect to MongoDB
 mongoose
-  .connect(process.env.MONGODB_URI)
+  .connect(process.env.MONGODB_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.error("MongoDB connection error:", err));
 
-// Define Ticket Schema (as part of the booking)
+// Define User Schema & Model (Fixed missing User model)
+const userSchema = new mongoose.Schema({
+  name: String,
+  email: { type: String, unique: true },
+  phone: String,
+  password: String,
+});
+const User = mongoose.model("User", userSchema);
+
+// Define Ticket Schema
 const ticketSchema = new mongoose.Schema({
-  type: {
-    type: String,
-    required: true,
-    enum: ["STAG", "COUPLE"],
-  },
-  quantity: {
-    type: Number,
-    required: true,
-  },
-  price: {
-    type: Number,
-    required: true,
-  },
+  type: { type: String, required: true, enum: ["STAG", "COUPLE"] },
+  quantity: { type: Number, required: true },
+  price: { type: Number, required: true },
 });
 
 // Define Booking Schema
 const bookingSchema = new mongoose.Schema({
   tickets: [ticketSchema],
-  totalAmount: {
-    type: Number,
-    required: true,
-  },
-  name: {
-    type: String,
-    required: true,
-  },
-  email: {
-    type: String,
-    required: true,
-  },
-  phone: {
-    type: String,
-    required: true,
-  },
-  userId: {
-    type: String,
-    required: true,
-  },
-  paymentId: {
-    type: String,
-    required: true,
-  },
-  bookingId: {
-    type: String,
-    required: true,
-  },
+  totalAmount: { type: Number, required: true },
+  name: { type: String, required: true },
+  email: { type: String, required: true },
+  phone: { type: String, required: true },
+  userId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: "User" },
+  paymentId: { type: String, required: true },
+  bookingId: { type: String, required: true },
   status: {
     type: String,
     required: true,
     enum: ["PENDING", "CONFIRMED", "USED"],
     default: "CONFIRMED",
   },
-  createdAt: {
-    type: Date,
-    default: Date.now,
-  },
+  createdAt: { type: Date, default: Date.now },
 });
 
 const Booking = mongoose.model("Booking", bookingSchema);
 
-// Create order endpoint
+// Test Route
 app.get("/test", (req, res) => {
   res.send("Hello World!");
 });
+
+// Create order endpoint
 app.post("/api/create-order", async (req, res) => {
   try {
     const { amount } = req.body;
 
     const options = {
-      amount: amount * 100, // Razorpay expects amount in paise
+      amount: amount * 100, // Convert to paise
       currency: "INR",
       receipt: "receipt_" + Date.now(),
       payment_capture: 1,
@@ -108,16 +91,14 @@ app.post("/api/create-order", async (req, res) => {
 
     const order = await razorpay.orders.create(options);
 
-    res.json({
-      id: order.id,
-      amount: order.amount,
-      currency: order.currency,
-    });
+    res.json({ id: order.id, amount: order.amount, currency: order.currency });
   } catch (error) {
     console.error("Error creating order:", error);
     res.status(500).json({ message: "Error creating order" });
   }
 });
+
+// Register user
 app.post("/register", async (req, res) => {
   const { name, email, phone, password } = req.body;
 
@@ -126,26 +107,20 @@ app.post("/register", async (req, res) => {
     if (user) return res.status(400).json({ message: "User already exists" });
 
     const hashedPassword = await bcrypt.hash(password, 10);
-
-    user = new User({
-      name,
-      email,
-      phone,
-      password: hashedPassword,
-    });
+    user = new User({ name, email, phone, password: hashedPassword });
 
     await user.save();
 
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-      expiresIn: "1h",
-    });
+    const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: "1h" });
 
     res.status(201).json({ token, user });
   } catch (error) {
-    console.error(error);
+    console.error("Error in registration:", error);
     res.status(500).json({ message: "Server error" });
   }
 });
+
+// Login user
 app.post("/login", async (req, res) => {
   const { email, password } = req.body;
 
@@ -157,16 +132,35 @@ app.post("/login", async (req, res) => {
     if (!isMatch)
       return res.status(400).json({ message: "Invalid credentials" });
 
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-      expiresIn: "1h",
-    });
+    const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: "1h" });
 
     res.json({ token, user });
   } catch (error) {
-    console.error(error);
+    console.error("Login error:", error);
     res.status(500).json({ message: "Server error" });
   }
 });
+
+// Authentication Middleware
+const auth = (req, res, next) => {
+  try {
+    const authHeader = req.header("Authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res
+        .status(401)
+        .json({ message: "No token, authorization denied" });
+    }
+
+    const token = authHeader.split(" ")[1];
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = { id: decoded.id }; // Fix: Use `decoded.id` instead of `decoded.userId`
+    next();
+  } catch (error) {
+    console.error("Auth middleware error:", error);
+    res.status(401).json({ message: "Invalid token" });
+  }
+};
+
 // Verify payment and save booking
 app.post("/api/verify-payment", async (req, res) => {
   try {
@@ -190,7 +184,7 @@ app.post("/api/verify-payment", async (req, res) => {
     // Generate a unique booking ID
     const bookingId = "BN" + Math.floor(Math.random() * 10000);
 
-    // Create new booking in database
+    // Save booking
     const newBooking = new Booking({
       tickets: formData.tickets,
       totalAmount: formData.totalAmount,
@@ -199,15 +193,11 @@ app.post("/api/verify-payment", async (req, res) => {
       phone: formData.phone,
       userId: formData.userId,
       paymentId: razorpay_payment_id,
-      bookingId: bookingId,
+      bookingId,
     });
 
     await newBooking.save();
-
-    res.json({
-      success: true,
-      booking: newBooking,
-    });
+    res.json({ success: true, booking: newBooking });
   } catch (error) {
     console.error("Error verifying payment:", error);
     res.status(500).json({ message: "Error verifying payment" });
@@ -236,68 +226,27 @@ app.get("/api/bookings", async (req, res) => {
     res.status(500).json({ message: "Error fetching bookings" });
   }
 });
-// Add this authentication middleware function
-const auth = (req, res, next) => {
-  try {
-    // Check if Authorization header exists
-    const authHeader = req.header("Authorization");
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res
-        .status(401)
-        .json({ message: "No token, authorization denied" });
-    }
 
-    // Extract token from header
-    const token = authHeader.split(" ")[1];
-
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-
-    // In your existing code, you use 'userId' in the JWT payload
-    // not 'user' with an 'id' property
-    req.user = { id: decoded.userId };
-
-    next();
-  } catch (error) {
-    console.error("Auth middleware error:", error);
-    res.status(401).json({ message: "Token is not valid" });
-  }
-};
-
-// Add this new endpoint for fetching passes
+// Get passes for the authenticated user
 app.get("/api/bookings/my-passes", auth, async (req, res) => {
   try {
-    // Now we can safely access req.user.id since we've set it correctly
     const userId = req.user.id;
-
-    console.log("Fetching passes for user:", userId);
-
-    // Find all bookings for this user
-    // Note: mongoose.Types.ObjectId is not needed if the userId is already a string
     const bookings = await Booking.find({ userId });
 
-    console.log(`Found ${bookings.length} bookings for user ${userId}`);
-
-    // Transform bookings into passes format expected by the frontend
-    const passes = bookings
-      .map((booking) => {
-        // For each ticket type in the booking, create a pass
-        return booking.tickets.map((ticket) => ({
-          _id: booking._id.toString(),
-          bookingId: booking.bookingId,
-          ticketType: ticket.type,
-          quantity: ticket.quantity,
-          totalAmount: ticket.price * ticket.quantity,
-          name: booking.name,
-          email: booking.email,
-          phone: booking.phone,
-          status: booking.status,
-          createdAt: booking.createdAt,
-        }));
-      })
-      .flat(); // Flatten the array of arrays
-
-    console.log(`Transformed into ${passes.length} passes`);
+    const passes = bookings.flatMap((booking) =>
+      booking.tickets.map((ticket) => ({
+        _id: booking._id.toString(),
+        bookingId: booking.bookingId,
+        ticketType: ticket.type,
+        quantity: ticket.quantity,
+        totalAmount: ticket.price * ticket.quantity,
+        name: booking.name,
+        email: booking.email,
+        phone: booking.phone,
+        status: booking.status,
+        createdAt: booking.createdAt,
+      }))
+    );
 
     res.json(passes);
   } catch (error) {
@@ -305,5 +254,6 @@ app.get("/api/bookings/my-passes", auth, async (req, res) => {
     res.status(500).json({ message: "Error fetching passes" });
   }
 });
+
 // Start server
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
