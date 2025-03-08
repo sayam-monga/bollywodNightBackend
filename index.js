@@ -241,4 +241,24 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
+// Routes
+app.get("/api/info", async (req, res) => {
+  try {
+    const bookings = await Booking.find();
+    res.json(bookings);
+  } catch (error) {
+    console.error("Error fetching bookings:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.get("/api/userInfo", async (req, res) => {
+  try {
+    const users = await User.find();
+    res.json(users);
+  } catch (error) {
+    console.error("Error fetching users:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
